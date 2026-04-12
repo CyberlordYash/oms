@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package order.v1;
+
+import "common/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/yourusername/oms/gen/order/v1;orderv1";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_MARKET      = 1; // Market order
+  ORDER_TYPE_LIMIT       = 2; // Limit order
+  ORDER_TYPE_SL          = 3; // Stop-Loss order (limit)
+  ORDER_TYPE_SL_M        = 4; // Stop-Loss Market order
+  ORDER_TYPE_AMO         = 5; // After Market Order
+}
+
+enum Exchange {
+  EXCHANGE_UNSPECIFIED = 0;
+  EXCHANGE_NSE         = 1;
+  EXCHANGE_BSE         = 2;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY         = 1;
+  SIDE_SELL        = 2;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING     = 1;
+  ORDER_STATUS_OPEN        = 2;
+  ORDER_STATUS_EXECUTED    = 3;
+  ORDER_STATUS_CANCELLED   = 4;
+  ORDER_STATUS_REJECTED    = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Request / Response messages
+// ---------------------------------------------------------------------------
+
+message PlaceOrderRequest {
+  string    symbol        = 1; // e.g. "RELIANCE", "NIFTY24DECFUT"
+  Exchange  exchange      = 2;
+  Side      side          = 3;
+  OrderType order_type    = 4;
+  int64     quantity      = 5; // number of shares / lots
+  // price in paise (e.g. 250000 = ₹2500.00). Ignored for MARKET orders.
+  int64     price         = 6;
+  string    client_id     = 7; // unique client / user identifier
+  // trigger_price is mandatory for SL and SL_M orders (in paise).
+  int64     trigger_price = 8;
+}
+
+message ModifyOrderRequest {
+  string order_id      = 1;
+  int64  quantity      = 2;
+  int64  price         = 3; // in paise
+  int64  trigger_price = 4; // in paise; for SL orders
+}
+
+message CancelOrderRequest {
+  string order_id  = 1;
+  string client_id = 2;
+}
+
+message OrderResponse {
+  string    order_id  = 1;
+  OrderStatus status  = 2;
+  string    message   = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message OrderStatusRequest {
+  string order_id = 1;
+}
+
+message OrderStatusResponse {
+  string      order_id         = 1;
+  string      symbol           = 2;
+  Exchange    exchange         = 3;
+  Side        side             = 4;
+  OrderType   order_type       = 5;
+  int64       quantity         = 6;
+  int64       filled_quantity  = 7;
+  int64       price            = 8;  // in paise
+  OrderStatus status           = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service OrderService {
+  rpc PlaceOrder(PlaceOrderRequest)       returns (OrderResponse);
+  rpc ModifyOrder(ModifyOrderRequest)     returns (OrderResponse);
+  rpc CancelOrder(CancelOrderRequest)     returns (OrderResponse);
+  rpc GetOrderStatus(OrderStatusRequest)  returns (OrderStatusResponse);
+}

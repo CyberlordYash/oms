@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: oms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oms
+      POSTGRES_PASSWORD: oms_secret
+      POSTGRES_DB: oms
+    ports:
+      - "5433:5432"   # host 5433 → container 5432 (avoids conflict with local postgres)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oms"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: oms-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"   # host 6380 → container 6379
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: oms-nats
+    restart: unless-stopped
+    command: ["-js", "-m", "8222"]  # enable JetStream + monitoring
+    ports:
+      - "4223:4222"   # host 4223 → container 4222 (client connections)
+      - "8223:8222"   # host 8223 → container 8222 (HTTP monitoring)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  order-service:
+    build:
+      context: .                                        # monorepo root — Dockerfile needs all modules
+      dockerfile: services/order-service/Dockerfile
+    container_name: oms-order-service
+    restart: unless-stopped
+    ports:
+      - "50051:50051"
+    environment:
+      GRPC_PORT: 50051
+      DB_HOST: postgres                                 # Docker service name
+      DB_PORT: 5432                                     # container-internal port
+      DB_USER: oms
+      DB_PASSWORD: oms_secret
+      DB_NAME: oms
+      NATS_URL: nats://nats:4222                        # container-internal port
+      RISK_ADDR: localhost:50052                        # stub; replace when risk-service is added
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

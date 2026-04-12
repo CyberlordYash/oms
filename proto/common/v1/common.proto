@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/yourusername/oms/gen/common/v1;commonv1";
+
+// Money represents a monetary value in the smallest unit (paise for INR).
+message Money {
+  int64  amount   = 1; // amount in smallest unit (paise)
+  string currency = 2; // e.g. "INR"
+}
+
+// Timestamp wraps a Unix epoch in milliseconds.
+message Timestamp {
+  int64 millis = 1; // milliseconds since Unix epoch
+}

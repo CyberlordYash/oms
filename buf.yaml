@@ -1,0 +1,17 @@
+version: v2
+
+modules:
+  - path: proto
+
+deps:
+  - buf.build/googleapis/googleapis
+
+lint:
+  use:
+    - DEFAULT
+  except:
+    - FIELD_LOWER_SNAKE_CASE  # allows trigger_price etc.
+
+breaking:
+  use:
+    - FILE

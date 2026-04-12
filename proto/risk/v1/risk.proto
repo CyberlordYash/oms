@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package risk.v1;
+
+import "order/v1/order.proto";
+
+option go_package = "github.com/yourusername/oms/gen/risk/v1;riskv1";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum ReasonCode {
+  REASON_CODE_UNSPECIFIED         = 0;
+  REASON_CODE_OK                  = 1;
+  REASON_CODE_DAILY_LIMIT_BREACH  = 2;
+  REASON_CODE_POSITION_LIMIT_BREACH = 3;
+  REASON_CODE_CIRCUIT_BREAKER_HIT = 4;
+  REASON_CODE_DUPLICATE_ORDER     = 5;
+  REASON_CODE_INSUFFICIENT_MARGIN = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message CheckRiskRequest {
+  string           client_id   = 1;
+  string           symbol      = 2;
+  order.v1.Exchange exchange    = 3;
+  order.v1.Side     side        = 4;
+  int64            quantity    = 5;
+  int64            price       = 6;  // in paise
+  int64            order_value = 7;  // quantity * price (in paise)
+}
+
+message CheckRiskResponse {
+  bool       approved    = 1;
+  ReasonCode reason_code = 2;
+  string     message     = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service RiskService {
+  rpc CheckRisk(CheckRiskRequest) returns (CheckRiskResponse);
+}

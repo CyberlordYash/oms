@@ -1,0 +1,7 @@
+go 1.24
+
+use (
+	./gen
+	./pkg
+	./services/order-service
+)
