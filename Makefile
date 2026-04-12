@@ -1,4 +1,4 @@
-.PHONY: proto run-order-service test docker-up docker-down lint tidy
+.PHONY: proto run-order-service run-risk-engine test docker-up docker-down lint tidy
 
 # ── Protobuf ─────────────────────────────────────────────────────────────────
 proto:
@@ -10,6 +10,9 @@ proto-lint:
 # ── Services ─────────────────────────────────────────────────────────────────
 run-order-service:
 	go run ./services/order-service/...
+
+run-risk-engine:
+	go run ./services/risk-engine/...
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 test:
@@ -29,6 +32,7 @@ docker-clean:
 tidy:
 	go work sync
 	go mod tidy -C services/order-service
+	go mod tidy -C services/risk-engine
 
 lint:
 	golangci-lint run ./...

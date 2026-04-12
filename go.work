@@ -4,4 +4,5 @@ use (
 	./gen
 	./pkg
 	./services/order-service
+	./services/risk-engine
 )
