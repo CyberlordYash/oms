@@ -3,13 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
 	orderv1 "github.com/yourusername/oms/gen/order/v1"
 	riskv1 "github.com/yourusername/oms/gen/risk/v1"
+	"github.com/yourusername/oms/services/order-service/internal/metrics"
 	"github.com/yourusername/oms/services/order-service/internal/natswrapper"
+	"github.com/yourusername/oms/services/order-service/internal/processor"
 	"github.com/yourusername/oms/services/order-service/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,6 +25,8 @@ const (
 	natsSubjectOrderPlaced    = "orders.placed"
 	natsSubjectOrderModified  = "orders.modified"
 	natsSubjectOrderCancelled = "orders.cancelled"
+	natsSubjectOrderExecuted  = "orders.executed"
+	natsSubjectOrderRejected  = "orders.rejected"
 )
 
 // OrderHandler implements orderv1.OrderServiceServer.
@@ -30,6 +35,8 @@ type OrderHandler struct {
 
 	repo     *repository.Repository
 	nats     natswrapper.Publisher
+	pool     *processor.Pool
+	metrics  *metrics.Registry
 	riskAddr string // gRPC address of the Risk Engine, e.g. "localhost:50052"
 	logger   *slog.Logger
 }
@@ -38,12 +45,16 @@ type OrderHandler struct {
 func New(
 	repo *repository.Repository,
 	nats natswrapper.Publisher,
+	pool *processor.Pool,
+	m *metrics.Registry,
 	riskAddr string,
 	logger *slog.Logger,
 ) *OrderHandler {
 	return &OrderHandler{
 		repo:     repo,
 		nats:     nats,
+		pool:     pool,
+		metrics:  m,
 		riskAddr: riskAddr,
 		logger:   logger,
 	}
@@ -63,6 +74,9 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 
 	// 2. Risk Engine check.
 	if err := h.checkRisk(ctx, req); err != nil {
+		if status.Code(err) == codes.PermissionDenied {
+			h.metrics.IncRejected() // risk-rejected orders count toward total rejections
+		}
 		return nil, err // already a gRPC status error
 	}
 
@@ -98,6 +112,23 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		"status":    created.Status,
 	}); pubErr != nil {
 		h.logger.WarnContext(ctx, "nats publish failed", "subject", natsSubjectOrderPlaced, "error", pubErr)
+	}
+
+	// 5. Hand the accepted order to the worker pool for async processing.
+	//    On back-pressure (queue full) we don't leave an orphaned PENDING row:
+	//    mark it REJECTED and tell the caller to retry.
+	if err := h.pool.Submit(ctx, processor.Job{
+		OrderID:  created.ID,
+		Symbol:   created.Symbol,
+		Quantity: created.Quantity,
+	}); err != nil {
+		if errors.Is(err, processor.ErrQueueFull) {
+			if uErr := h.repo.UpdateOrderStatus(ctx, created.ID, "REJECTED"); uErr != nil {
+				h.logger.ErrorContext(ctx, "failed to reject overflowed order", "order_id", created.ID, "error", uErr)
+			}
+			return nil, status.Errorf(codes.Unavailable, "order queue full, retry shortly")
+		}
+		return nil, status.Errorf(codes.Internal, "submit order: %v", err)
 	}
 
 	h.logger.InfoContext(ctx, "order placed", "order_id", created.ID, "client_id", created.ClientID)

@@ -90,6 +90,24 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID, status stri
 	return nil
 }
 
+// UpdateOrderFill sets the terminal status and filled quantity of an order.
+// Used by the processor worker pool when the (fake) colo returns an outcome.
+func (r *Repository) UpdateOrderFill(ctx context.Context, orderID, status string, filledQty int64) error {
+	const q = `
+		UPDATE orders
+		SET    status = $1, filled_quantity = $2, updated_at = $3
+		WHERE  id = $4`
+
+	tag, err := r.pool.Exec(ctx, q, status, filledQty, time.Now().UTC(), orderID)
+	if err != nil {
+		return fmt.Errorf("repo: update order fill: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("repo: update order fill: order %s not found", orderID)
+	}
+	return nil
+}
+
 // GetOrderByID retrieves a single order by its ID.
 func (r *Repository) GetOrderByID(ctx context.Context, orderID string) (Order, error) {
 	const q = `

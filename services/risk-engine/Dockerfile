@@ -19,16 +19,15 @@ COPY services/risk-engine/go.mod \
 # Download all dependencies (cached unless go.mod/go.sum change)
 RUN go work sync
 
-# Copy source
-COPY gen/       ./gen/
-COPY pkg/       ./pkg/
-COPY services/order-service/ ./services/order-service/
+# Copy source (risk-engine only needs the generated code + its own package)
+COPY gen/                  ./gen/
+COPY services/risk-engine/ ./services/risk-engine/
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -ldflags="-s -w" \
-      -o /order-service \
-      ./services/order-service
+      -o /risk-engine \
+      ./services/risk-engine
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM alpine:3.21
@@ -36,8 +35,8 @@ FROM alpine:3.21
 # ca-certificates for TLS; nc (netcat) for the healthcheck in docker-compose
 RUN apk add --no-cache ca-certificates netcat-openbsd
 
-COPY --from=builder /order-service /order-service
+COPY --from=builder /risk-engine /risk-engine
 
-EXPOSE 50051 8080
+EXPOSE 50052
 
-ENTRYPOINT ["/order-service"]
+ENTRYPOINT ["/risk-engine"]
