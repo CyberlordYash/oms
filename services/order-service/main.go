@@ -18,6 +18,7 @@ import (
 	"github.com/yourusername/oms/services/order-service/internal/metrics"
 	"github.com/yourusername/oms/services/order-service/internal/processor"
 	"github.com/yourusername/oms/services/order-service/repository"
+	"github.com/yourusername/oms/services/order-service/routes"
 	"github.com/yourusername/oms/services/order-service/server"
 )
 
@@ -115,7 +116,7 @@ func run(logger *slog.Logger) error {
 
 	// ── Servers (gRPC + HTTP share the same OrderHandler) ──────────────────────
 	grpcServer, orderHandler := server.New(repo, publisher, workerPool, reg, viper.GetString("risk.addr"), logger)
-	httpServer := server.NewHTTPServer(fmt.Sprintf(":%d", httpPort), orderHandler, reg, logger)
+	httpServer := routes.New(fmt.Sprintf(":%d", httpPort), orderHandler, reg, logger)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
 	if err != nil {

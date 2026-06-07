@@ -75,7 +75,7 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 	// 2. Risk Engine check.
 	if err := h.checkRisk(ctx, req); err != nil {
 		if status.Code(err) == codes.PermissionDenied {
-			h.metrics.IncRejected() // risk-rejected orders count toward total rejections
+			h.metrics.IncRejected()
 		}
 		return nil, err // already a gRPC status error
 	}
@@ -114,9 +114,7 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		h.logger.WarnContext(ctx, "nats publish failed", "subject", natsSubjectOrderPlaced, "error", pubErr)
 	}
 
-	// 5. Hand the accepted order to the worker pool for async processing.
-	//    On back-pressure (queue full) we don't leave an orphaned PENDING row:
-	//    mark it REJECTED and tell the caller to retry.
+	// 5. Hand off to the worker pool; a full queue rejects the order rather than orphan it.
 	if err := h.pool.Submit(ctx, processor.Job{
 		OrderID:  created.ID,
 		Symbol:   created.Symbol,
