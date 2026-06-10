@@ -7,7 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Config holds Postgres connection parameters.
 type Config struct {
 	Host     string
 	Port     int
@@ -17,7 +16,6 @@ type Config struct {
 	SSLMode  string
 }
 
-// DSN returns a PostgreSQL connection string for pgx.
 func (c Config) DSN() string {
 	sslMode := c.SSLMode
 	if sslMode == "" {
@@ -29,7 +27,6 @@ func (c Config) DSN() string {
 	)
 }
 
-// NewPool creates a pgx connection pool and verifies connectivity via Ping.
 func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {

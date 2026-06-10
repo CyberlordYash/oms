@@ -36,7 +36,6 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	// ── Config ────────────────────────────────────────────────────────────────
 	viper.SetDefault("grpc.port", 50051)
 	viper.SetDefault("http.port", 8080)
 	viper.SetDefault("db.host", "localhost")
@@ -63,7 +62,6 @@ func run(logger *slog.Logger) error {
 	grpcPort := viper.GetInt("grpc.port")
 	httpPort := viper.GetInt("http.port")
 
-	// ── Postgres ──────────────────────────────────────────────────────────────
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -80,7 +78,6 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 	logger.Info("postgres connected")
 
-	// ── Redis (position tracking for JetStream consumer) ─────────────────────
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         viper.GetString("redis.addr"),
 		DialTimeout:  5 * time.Second,
@@ -90,7 +87,6 @@ func run(logger *slog.Logger) error {
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pingCancel()
 	if err := rdb.Ping(pingCtx).Err(); err != nil {
-		// Redis is used for position tracking only; let the service start without it.
 		logger.Warn("redis unavailable — position tracking will be disabled", "error", err)
 		rdb = nil
 	} else {
@@ -98,7 +94,6 @@ func run(logger *slog.Logger) error {
 		logger.Info("redis connected", "addr", viper.GetString("redis.addr"))
 	}
 
-	// ── NATS ──────────────────────────────────────────────────────────────────
 	natsClient, err := pkgnats.New(pkgnats.Config{
 		URL:           viper.GetString("nats.url"),
 		MaxReconnects: 10,
@@ -111,7 +106,6 @@ func run(logger *slog.Logger) error {
 		logger.Info("nats connected")
 	}
 
-	// ── Dependencies ──────────────────────────────────────────────────────────
 	repo := repository.New(pool)
 
 	var publisher natswrapper
@@ -132,7 +126,6 @@ func run(logger *slog.Logger) error {
 	})
 	workerPool.Start()
 
-	// ── Servers ───────────────────────────────────────────────────────────────
 	grpcServer, orderHandler, err := server.New(repo, publisher, workerPool, reg, viper.GetString("risk.addr"), logger)
 	if err != nil {
 		return fmt.Errorf("build gRPC server: %w", err)
@@ -146,12 +139,10 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("listen on :%d: %w", grpcPort, err)
 	}
 
-	// ── JetStream consumer ────────────────────────────────────────────────────
 	var posTracker *consumer.PositionTracker
 	if natsClient != nil && rdb != nil {
 		posTracker = consumer.New(natsClient.JS, rdb, logger)
 		if err := posTracker.Start(context.Background()); err != nil {
-			// Non-fatal: position tracking is a best-effort enhancement.
 			logger.Warn("position tracker failed to start", "error", err)
 			posTracker = nil
 		} else {
@@ -159,7 +150,6 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
-	// ── Run + graceful shutdown ───────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 

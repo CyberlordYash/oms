@@ -9,7 +9,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// loggingInterceptor logs every unary RPC with its duration and status code.
 func loggingInterceptor(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,

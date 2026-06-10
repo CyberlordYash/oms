@@ -15,49 +15,37 @@ import (
 )
 
 const (
-	// maxDailyTurnover is ₹25,00,000 expressed in paise.
-	maxDailyTurnover int64 = 2_500_000_000
-	// maxPosition is the maximum open quantity per symbol per client.
-	maxPosition int64 = 10_000
-	// circuitBreakerPct is the maximum allowed price deviation from the last traded price.
-	circuitBreakerPct = 0.20
-	// dupOrderTTL is how long a duplicate-order sentinel lives in Redis.
-	dupOrderTTL = 500 * time.Millisecond
-	// dailyLimitTTL resets the daily counter at midnight (24 h is a close enough approximation).
-	dailyLimitTTL = 24 * time.Hour
+	maxDailyTurnover int64 = 2_500_000_000 // ₹25,00,000 in paise
+	maxPosition      int64 = 10_000
+	circuitBreakerPct      = 0.20
+	dupOrderTTL            = 500 * time.Millisecond
+	dailyLimitTTL          = 24 * time.Hour
 )
 
-// RiskHandler implements riskv1.RiskServiceServer.
 type RiskHandler struct {
 	riskv1.UnimplementedRiskServiceServer
 	rdb *redis.Client
 }
 
-// New returns a configured RiskHandler.
 func New(rdb *redis.Client) *RiskHandler {
 	return &RiskHandler{rdb: rdb}
 }
 
-// CheckRisk runs a sequence of risk checks and returns the first rejection found.
-// All checks must pass for the order to be approved.
 func (h *RiskHandler) CheckRisk(ctx context.Context, req *riskv1.CheckRiskRequest) (*riskv1.CheckRiskResponse, error) {
 	if err := validateRequest(req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
 	}
 
-	// ── a. Duplicate order ────────────────────────────────────────────────────
 	dupKey := fmt.Sprintf("dup:%s:%s:%s", req.ClientId, req.Symbol, req.Side.String())
 	set, err := h.rdb.SetNX(ctx, dupKey, "1", dupOrderTTL).Result()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "redis: dup check: %v", err)
 	}
 	if !set {
-		// Key already existed → duplicate within the TTL window.
 		return reject(riskv1.ReasonCode_REASON_CODE_DUPLICATE_ORDER,
 			"duplicate order detected within 500 ms window"), nil
 	}
 
-	// ── b. Daily turnover limit ───────────────────────────────────────────────
 	dailyKey := fmt.Sprintf("daily_limit:%s", req.ClientId)
 	existing, err := h.rdb.Get(ctx, dailyKey).Int64()
 	if err != nil && err != redis.Nil {
@@ -68,7 +56,6 @@ func (h *RiskHandler) CheckRisk(ctx context.Context, req *riskv1.CheckRiskReques
 			fmt.Sprintf("daily turnover limit of ₹%.2f exceeded", float64(maxDailyTurnover)/100)), nil
 	}
 
-	// ── c. Circuit breaker ────────────────────────────────────────────────────
 	lastPriceKey := fmt.Sprintf("last_price:%s", req.Symbol)
 	lastPriceStr, err := h.rdb.Get(ctx, lastPriceKey).Result()
 	if err != nil && err != redis.Nil {
@@ -87,7 +74,6 @@ func (h *RiskHandler) CheckRisk(ctx context.Context, req *riskv1.CheckRiskReques
 		}
 	}
 
-	// ── d. Position limit ─────────────────────────────────────────────────────
 	posKey := fmt.Sprintf("position:%s:%s", req.ClientId, req.Symbol)
 	currentPos, err := h.rdb.Get(ctx, posKey).Int64()
 	if err != nil && err != redis.Nil {
@@ -99,11 +85,9 @@ func (h *RiskHandler) CheckRisk(ctx context.Context, req *riskv1.CheckRiskReques
 				maxPosition, currentPos, req.Quantity)), nil
 	}
 
-	// ── e. All checks passed — commit daily turnover ──────────────────────────
 	pipe := h.rdb.Pipeline()
 	incrCmd := pipe.IncrBy(ctx, dailyKey, req.OrderValue)
-	// Set TTL only when the key is new (IncrBy returns the new value == req.OrderValue).
-	pipe.ExpireNX(ctx, dailyKey, dailyLimitTTL)
+	pipe.ExpireNX(ctx, dailyKey, dailyLimitTTL) // only sets TTL on first increment
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "redis: daily limit update: %v", err)
 	}
@@ -115,10 +99,6 @@ func (h *RiskHandler) CheckRisk(ctx context.Context, req *riskv1.CheckRiskReques
 		Message:    "all risk checks passed",
 	}, nil
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func validateRequest(req *riskv1.CheckRiskRequest) error {
 	if req.ClientId == "" {

@@ -5,9 +5,6 @@ import (
 	"sync/atomic"
 )
 
-// Registry holds runtime counters for the order pipeline. The scalar counters
-// are atomics (touched by every worker), while the per-symbol breakdown needs a
-// lock because a map can't be written concurrently.
 type Registry struct {
 	accepted  atomic.Int64
 	executed  atomic.Int64

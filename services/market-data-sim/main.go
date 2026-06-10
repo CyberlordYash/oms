@@ -1,6 +1,3 @@
-// market-data-sim seeds last_price:{symbol} in Redis with realistic NSE prices
-// and advances them with small random ticks so the risk engine's circuit-breaker
-// check (±20% deviation) fires on grossly out-of-range orders.
 package main
 
 import (
@@ -17,7 +14,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// initialPrices are NSE spot prices expressed in paise (₹1 = 100 paise).
 var initialPrices = map[string]float64{
 	"RELIANCE":  280000, // ₹2,800
 	"TCS":       410000, // ₹4,100
@@ -65,7 +61,6 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("redis connected", "addr", redisAddr)
 
-	// Seed initial prices so the circuit breaker has a baseline from the start.
 	prices := make(map[string]float64, len(initialPrices))
 	seedCtx := context.Background()
 	for sym, price := range initialPrices {
@@ -92,11 +87,9 @@ func run(logger *slog.Logger) error {
 			tickCtx := context.Background()
 			pipe := rdb.Pipeline()
 			for sym := range prices {
-				// ±1% random walk each tick.
 				pct := (rand.Float64()*2 - 1) * 0.01
 				prices[sym] = prices[sym] * (1 + pct)
-				// Clamp to a floor of ₹1 (100 paise) to avoid zero/negative prices.
-				if prices[sym] < 100 {
+				if prices[sym] < 100 { // floor at ₹1
 					prices[sym] = 100
 				}
 				pipe.Set(tickCtx, "last_price:"+sym, strconv.FormatFloat(prices[sym], 'f', 2, 64), 0)

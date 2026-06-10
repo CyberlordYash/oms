@@ -16,8 +16,6 @@ type Router struct {
 	metrics *metrics.Registry
 }
 
-// New builds the HTTP server: a gin engine with the /order route group plus
-// health and metrics endpoints.
 func New(addr string, orders *handler.OrderHandler, m *metrics.Registry, logger *slog.Logger) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 

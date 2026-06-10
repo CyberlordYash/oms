@@ -1,6 +1,3 @@
-// Package processor is the async worker pool that processes accepted orders.
-// Orders are pushed onto a bounded channel and drained by a fixed set of
-// workers; a full queue is rejected rather than allowed to grow without limit.
 package processor
 
 import (
@@ -85,8 +82,6 @@ func (p *Pool) Start() {
 	p.logger.Info("processor pool started", "workers", p.cfg.Workers, "queue", p.cfg.QueueSize)
 }
 
-// Submit enqueues a job. If the queue is full for longer than SubmitTimeout it
-// gives up with ErrQueueFull instead of blocking the caller indefinitely.
 func (p *Pool) Submit(ctx context.Context, j Job) error {
 	timer := time.NewTimer(p.cfg.SubmitTimeout)
 	defer timer.Stop()
@@ -103,7 +98,6 @@ func (p *Pool) Submit(ctx context.Context, j Job) error {
 	}
 }
 
-// Stop closes the queue and waits for in-flight orders to finish, bounded by ctx.
 func (p *Pool) Stop(ctx context.Context) {
 	close(p.jobs)
 

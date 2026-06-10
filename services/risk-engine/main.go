@@ -35,7 +35,6 @@ func main() {
 func run(logger *slog.Logger) error {
 	cfg := config.Load()
 
-	// ── Redis ─────────────────────────────────────────────────────────────────
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         cfg.RedisAddr,
 		DialTimeout:  5 * time.Second,
@@ -51,7 +50,6 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("redis connected", "addr", cfg.RedisAddr)
 
-	// ── gRPC server ───────────────────────────────────────────────────────────
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(loggingInterceptor(logger)),
 	}
@@ -69,7 +67,6 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("listen on :%d: %w", cfg.GRPCPort, err)
 	}
 
-	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -93,8 +90,6 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-// grpcServerCreds returns mTLS credentials when GRPC_TLS_CERT / GRPC_TLS_KEY
-// are set; adds client-cert verification when GRPC_CA_CERT is also set.
 func grpcServerCreds(logger *slog.Logger) (credentials.TransportCredentials, bool) {
 	certFile := os.Getenv("GRPC_TLS_CERT")
 	keyFile := os.Getenv("GRPC_TLS_KEY")
@@ -125,7 +120,6 @@ func grpcServerCreds(logger *slog.Logger) (credentials.TransportCredentials, boo
 	return credentials.NewTLS(tlsCfg), true
 }
 
-// loggingInterceptor logs every unary RPC call with its duration and gRPC status code.
 func loggingInterceptor(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,

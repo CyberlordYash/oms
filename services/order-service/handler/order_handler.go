@@ -33,7 +33,6 @@ const (
 	natsSubjectOrderRejected  = "orders.rejected"
 )
 
-// OrderHandler implements orderv1.OrderServiceServer.
 type OrderHandler struct {
 	orderv1.UnimplementedOrderServiceServer
 
@@ -46,8 +45,6 @@ type OrderHandler struct {
 	logger     *slog.Logger
 }
 
-// New dials the Risk Engine once at startup and returns a configured handler.
-// Call Close() when shutting down to release the connection.
 func New(
 	repo *repository.Repository,
 	nats natswrapper.Publisher,
@@ -72,19 +69,12 @@ func New(
 	}, nil
 }
 
-// Close releases the persistent gRPC connection to the Risk Engine.
 func (h *OrderHandler) Close() {
 	if h.riskConn != nil {
 		_ = h.riskConn.Close()
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PlaceOrder
-// ---------------------------------------------------------------------------
-
-// PlaceOrder validates the request, performs a risk check, persists the order
-// with status PENDING, and publishes an event to NATS.
 func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRequest) (*orderv1.OrderResponse, error) {
 	// 1. Basic field validation.
 	if err := validatePlaceOrder(req); err != nil {
@@ -99,7 +89,6 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		return nil, err // already a gRPC status error
 	}
 
-	// 3. Persist with status PENDING.
 	order := repository.Order{
 		ID:           uuid.New().String(),
 		ClientID:     req.ClientId,
@@ -119,7 +108,6 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		return nil, status.Errorf(codes.Internal, "persist order: %v", err)
 	}
 
-	// 4. Publish event (non-fatal on failure — order is already persisted).
 	if pubErr := h.publishEvent(natsSubjectOrderPlaced, map[string]any{
 		"order_id":  created.ID,
 		"client_id": created.ClientID,
@@ -133,7 +121,6 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		h.logger.WarnContext(ctx, "nats publish failed", "subject", natsSubjectOrderPlaced, "error", pubErr)
 	}
 
-	// 5. Hand off to the worker pool; a full queue rejects the order rather than orphan it.
 	if err := h.pool.Submit(ctx, processor.Job{
 		OrderID:  created.ID,
 		ClientID: created.ClientID,
@@ -159,10 +146,6 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 		Timestamp: timestamppb.New(created.CreatedAt),
 	}, nil
 }
-
-// ---------------------------------------------------------------------------
-// ModifyOrder
-// ---------------------------------------------------------------------------
 
 func (h *OrderHandler) ModifyOrder(ctx context.Context, req *orderv1.ModifyOrderRequest) (*orderv1.OrderResponse, error) {
 	if req.OrderId == "" {
@@ -194,10 +177,6 @@ func (h *OrderHandler) ModifyOrder(ctx context.Context, req *orderv1.ModifyOrder
 		Message: "Modify request submitted",
 	}, nil
 }
-
-// ---------------------------------------------------------------------------
-// CancelOrder
-// ---------------------------------------------------------------------------
 
 func (h *OrderHandler) CancelOrder(ctx context.Context, req *orderv1.CancelOrderRequest) (*orderv1.OrderResponse, error) {
 	if req.OrderId == "" {
@@ -234,10 +213,6 @@ func (h *OrderHandler) CancelOrder(ctx context.Context, req *orderv1.CancelOrder
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// GetOrderStatus
-// ---------------------------------------------------------------------------
-
 func (h *OrderHandler) GetOrderStatus(ctx context.Context, req *orderv1.OrderStatusRequest) (*orderv1.OrderStatusResponse, error) {
 	if req.OrderId == "" {
 		return nil, status.Error(codes.InvalidArgument, "order_id is required")
@@ -262,10 +237,6 @@ func (h *OrderHandler) GetOrderStatus(ctx context.Context, req *orderv1.OrderSta
 		UpdatedAt:      timestamppb.New(o.UpdatedAt),
 	}, nil
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func validatePlaceOrder(req *orderv1.PlaceOrderRequest) error {
 	if req.Symbol == "" {
@@ -296,7 +267,6 @@ func validatePlaceOrder(req *orderv1.PlaceOrderRequest) error {
 	return nil
 }
 
-// checkRisk calls the Risk Engine over the persistent connection.
 func (h *OrderHandler) checkRisk(ctx context.Context, req *orderv1.PlaceOrderRequest) error {
 	resp, err := h.riskClient.CheckRisk(ctx, &riskv1.CheckRiskRequest{
 		ClientId:   req.ClientId,

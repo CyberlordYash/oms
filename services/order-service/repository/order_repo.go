@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Order represents a persisted order record.
 type Order struct {
 	ID             string
 	ClientID       string
@@ -25,17 +24,14 @@ type Order struct {
 	UpdatedAt      time.Time
 }
 
-// Repository provides data-access methods for orders.
 type Repository struct {
 	pool *pgxpool.Pool
 }
 
-// New returns a new Repository backed by the given pgx pool.
 func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// CreateOrder inserts a new order row and returns the full record.
 func (r *Repository) CreateOrder(ctx context.Context, o Order) (Order, error) {
 	const q = `
 		INSERT INTO orders (
@@ -73,7 +69,6 @@ func (r *Repository) CreateOrder(ctx context.Context, o Order) (Order, error) {
 	return out, nil
 }
 
-// UpdateOrderStatus updates the status (and updated_at) of an existing order.
 func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID, status string) error {
 	const q = `
 		UPDATE orders
@@ -90,8 +85,6 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID, status stri
 	return nil
 }
 
-// UpdateOrderFill sets the terminal status and filled quantity of an order.
-// Used by the processor worker pool when the (fake) colo returns an outcome.
 func (r *Repository) UpdateOrderFill(ctx context.Context, orderID, status string, filledQty int64) error {
 	const q = `
 		UPDATE orders
@@ -108,7 +101,6 @@ func (r *Repository) UpdateOrderFill(ctx context.Context, orderID, status string
 	return nil
 }
 
-// GetOrderByID retrieves a single order by its ID.
 func (r *Repository) GetOrderByID(ctx context.Context, orderID string) (Order, error) {
 	const q = `
 		SELECT id, client_id, symbol, exchange, side, order_type,

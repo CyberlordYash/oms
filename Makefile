@@ -1,4 +1,4 @@
-.PHONY: proto run-order-service run-risk-engine test docker-up docker-down lint tidy gen-certs
+.PHONY: proto run-order-service run-risk-engine test docker-up docker-down lint tidy gen-certs db-connect db-migrate
 
 # ── Protobuf ─────────────────────────────────────────────────────────────────
 proto:
@@ -27,6 +27,13 @@ docker-down:
 
 docker-clean:
 	docker compose down -v --remove-orphans
+
+# ── Database ──────────────────────────────────────────────────────────────────
+db-connect:
+	docker exec -it oms-postgres psql -U oms -d oms
+
+db-migrate:
+	docker exec -i oms-postgres psql -U oms -d oms < db/init/01_schema.sql
 
 # ── Go workspace ─────────────────────────────────────────────────────────────
 tidy:

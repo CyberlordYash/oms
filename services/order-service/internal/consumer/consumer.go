@@ -1,10 +1,3 @@
-// Package consumer sets up NATS JetStream subscriptions for the order-service.
-//
-// Stream:   ORDERS — captures all orders.* subjects for durable replay.
-// Consumer: position-tracker — subscribes to orders.executed and updates
-//
-//	position:{client_id}:{symbol} in Redis so the risk engine's position
-//	limit check stays accurate across order executions.
 package consumer
 
 import (
@@ -36,8 +29,6 @@ type executedEvent struct {
 	Status        string `json:"status"`
 }
 
-// PositionTracker consumes orders.executed events and keeps
-// position:{client_id}:{symbol} counters in Redis up to date.
 type PositionTracker struct {
 	js     jetstream.JetStream
 	rdb    *redis.Client
@@ -46,13 +37,10 @@ type PositionTracker struct {
 	mu     sync.Mutex
 }
 
-// New creates a PositionTracker. Call Start to begin consuming.
 func New(js jetstream.JetStream, rdb *redis.Client, logger *slog.Logger) *PositionTracker {
 	return &PositionTracker{js: js, rdb: rdb, logger: logger}
 }
 
-// Start creates (or updates) the ORDERS stream and durable consumer, then
-// begins processing messages in the background.
 func (p *PositionTracker) Start(ctx context.Context) error {
 	_, err := p.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:      streamName,
@@ -94,7 +82,6 @@ func (p *PositionTracker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop drains the consumer gracefully.
 func (p *PositionTracker) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

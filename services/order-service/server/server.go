@@ -1,5 +1,3 @@
-// Package server wires together all gRPC service handlers and returns a
-// ready-to-serve *grpc.Server.
 package server
 
 import (
@@ -20,9 +18,6 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-// New creates a gRPC server with all OMS services registered and returns it
-// together with the shared OrderHandler (so the same handler also backs HTTP).
-// The caller must call orderHandler.Close() on shutdown.
 func New(
 	repo *repository.Repository,
 	nats natswrapper.Publisher,
@@ -50,8 +45,6 @@ func New(
 	return s, orderHandler, nil
 }
 
-// grpcServerCreds returns mTLS credentials when GRPC_TLS_CERT / GRPC_TLS_KEY
-// (and optionally GRPC_CA_CERT for client verification) are set.
 func grpcServerCreds() (credentials.TransportCredentials, bool) {
 	certFile := os.Getenv("GRPC_TLS_CERT")
 	keyFile := os.Getenv("GRPC_TLS_KEY")
