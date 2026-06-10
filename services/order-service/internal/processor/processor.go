@@ -26,7 +26,9 @@ var ErrQueueFull = errors.New("processor: order queue full")
 
 type Job struct {
 	OrderID  string
+	ClientID string
 	Symbol   string
+	Side     string // "SIDE_BUY" | "SIDE_SELL"
 	Quantity int64
 }
 
@@ -146,17 +148,20 @@ func (p *Pool) process(j Job) {
 		p.metrics.RecordExecuted(j.Symbol)
 		p.publish(subjectOrderExecuted, map[string]any{
 			"order_id":        j.OrderID,
+			"client_id":       j.ClientID,
 			"symbol":          j.Symbol,
+			"side":            j.Side,
 			"filled_quantity": res.filledQty,
 			"status":          res.status,
 		})
 	case "REJECTED":
 		p.metrics.IncRejected()
 		p.publish(subjectOrderRejected, map[string]any{
-			"order_id": j.OrderID,
-			"symbol":   j.Symbol,
-			"reason":   res.reason,
-			"status":   res.status,
+			"order_id":  j.OrderID,
+			"client_id": j.ClientID,
+			"symbol":    j.Symbol,
+			"reason":    res.reason,
+			"status":    res.status,
 		})
 	}
 

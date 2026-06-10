@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +17,7 @@ import (
 	"github.com/yourusername/oms/services/risk-engine/config"
 	"github.com/yourusername/oms/services/risk-engine/handler"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -49,9 +52,15 @@ func run(logger *slog.Logger) error {
 	logger.Info("redis connected", "addr", cfg.RedisAddr)
 
 	// ── gRPC server ───────────────────────────────────────────────────────────
-	srv := grpc.NewServer(
+	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(loggingInterceptor(logger)),
-	)
+	}
+	if creds, ok := grpcServerCreds(logger); ok {
+		opts = append(opts, grpc.Creds(creds))
+		logger.Info("mTLS enabled")
+	}
+
+	srv := grpc.NewServer(opts...)
 	riskv1.RegisterRiskServiceServer(srv, handler.New(rdb))
 	reflection.Register(srv)
 
@@ -82,6 +91,38 @@ func run(logger *slog.Logger) error {
 	}
 
 	return nil
+}
+
+// grpcServerCreds returns mTLS credentials when GRPC_TLS_CERT / GRPC_TLS_KEY
+// are set; adds client-cert verification when GRPC_CA_CERT is also set.
+func grpcServerCreds(logger *slog.Logger) (credentials.TransportCredentials, bool) {
+	certFile := os.Getenv("GRPC_TLS_CERT")
+	keyFile := os.Getenv("GRPC_TLS_KEY")
+	if certFile == "" || keyFile == "" {
+		return nil, false
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		logger.Warn("TLS cert load failed, falling back to insecure", "error", err)
+		return nil, false
+	}
+
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+
+	if caFile := os.Getenv("GRPC_CA_CERT"); caFile != "" {
+		caPEM, err := os.ReadFile(caFile)
+		if err == nil {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM(caPEM)
+			tlsCfg.ClientCAs = pool
+			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			logger.Warn("CA cert load failed, skipping client auth", "error", err)
+		}
+	}
+
+	return credentials.NewTLS(tlsCfg), true
 }
 
 // loggingInterceptor logs every unary RPC call with its duration and gRPC status code.

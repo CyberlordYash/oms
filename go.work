@@ -3,6 +3,7 @@ go 1.25.0
 use (
 	./gen
 	./pkg
+	./services/market-data-sim
 	./services/order-service
 	./services/risk-engine
 )

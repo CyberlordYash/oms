@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/google/uuid"
 	orderv1 "github.com/yourusername/oms/gen/order/v1"
@@ -16,6 +19,7 @@ import (
 	"github.com/yourusername/oms/services/order-service/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -33,15 +37,17 @@ const (
 type OrderHandler struct {
 	orderv1.UnimplementedOrderServiceServer
 
-	repo     *repository.Repository
-	nats     natswrapper.Publisher
-	pool     *processor.Pool
-	metrics  *metrics.Registry
-	riskAddr string // gRPC address of the Risk Engine, e.g. "localhost:50052"
-	logger   *slog.Logger
+	repo       *repository.Repository
+	nats       natswrapper.Publisher
+	pool       *processor.Pool
+	metrics    *metrics.Registry
+	riskConn   *grpc.ClientConn
+	riskClient riskv1.RiskServiceClient
+	logger     *slog.Logger
 }
 
-// New returns a configured OrderHandler.
+// New dials the Risk Engine once at startup and returns a configured handler.
+// Call Close() when shutting down to release the connection.
 func New(
 	repo *repository.Repository,
 	nats natswrapper.Publisher,
@@ -49,14 +55,27 @@ func New(
 	m *metrics.Registry,
 	riskAddr string,
 	logger *slog.Logger,
-) *OrderHandler {
+) (*OrderHandler, error) {
+	conn, err := grpc.NewClient(riskAddr, grpc.WithTransportCredentials(riskTransportCreds()))
+	if err != nil {
+		return nil, fmt.Errorf("dial risk engine %s: %w", riskAddr, err)
+	}
+
 	return &OrderHandler{
-		repo:     repo,
-		nats:     nats,
-		pool:     pool,
-		metrics:  m,
-		riskAddr: riskAddr,
-		logger:   logger,
+		repo:       repo,
+		nats:       nats,
+		pool:       pool,
+		metrics:    m,
+		riskConn:   conn,
+		riskClient: riskv1.NewRiskServiceClient(conn),
+		logger:     logger,
+	}, nil
+}
+
+// Close releases the persistent gRPC connection to the Risk Engine.
+func (h *OrderHandler) Close() {
+	if h.riskConn != nil {
+		_ = h.riskConn.Close()
 	}
 }
 
@@ -117,7 +136,9 @@ func (h *OrderHandler) PlaceOrder(ctx context.Context, req *orderv1.PlaceOrderRe
 	// 5. Hand off to the worker pool; a full queue rejects the order rather than orphan it.
 	if err := h.pool.Submit(ctx, processor.Job{
 		OrderID:  created.ID,
+		ClientID: created.ClientID,
 		Symbol:   created.Symbol,
+		Side:     created.Side,
 		Quantity: created.Quantity,
 	}); err != nil {
 		if errors.Is(err, processor.ErrQueueFull) {
@@ -230,13 +251,13 @@ func (h *OrderHandler) GetOrderStatus(ctx context.Context, req *orderv1.OrderSta
 	return &orderv1.OrderStatusResponse{
 		OrderId:        o.ID,
 		Symbol:         o.Symbol,
-		Exchange:       orderv1.Exchange(orderv1.Exchange_value["EXCHANGE_"+o.Exchange]),
-		Side:           orderv1.Side(orderv1.Side_value["SIDE_"+o.Side]),
-		OrderType:      orderv1.OrderType(orderv1.OrderType_value["ORDER_TYPE_"+o.OrderType]),
+		Exchange:       orderv1.Exchange(orderv1.Exchange_value[o.Exchange]),
+		Side:           orderv1.Side(orderv1.Side_value[o.Side]),
+		OrderType:      orderv1.OrderType(orderv1.OrderType_value[o.OrderType]),
 		Quantity:       o.Quantity,
 		FilledQuantity: o.FilledQuantity,
 		Price:          o.Price,
-		Status:         orderv1.OrderStatus(orderv1.OrderStatus_value["ORDER_STATUS_"+o.Status]),
+		Status:         orderv1.OrderStatus(orderv1.OrderStatus_value[o.Status]),
 		CreatedAt:      timestamppb.New(o.CreatedAt),
 		UpdatedAt:      timestamppb.New(o.UpdatedAt),
 	}, nil
@@ -275,15 +296,9 @@ func validatePlaceOrder(req *orderv1.PlaceOrderRequest) error {
 	return nil
 }
 
-// checkRisk dials the Risk Engine and returns a gRPC status error on rejection.
+// checkRisk calls the Risk Engine over the persistent connection.
 func (h *OrderHandler) checkRisk(ctx context.Context, req *orderv1.PlaceOrderRequest) error {
-	conn, err := grpc.NewClient(h.riskAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "risk engine unavailable: %v", err)
-	}
-	defer conn.Close()
-
-	resp, err := riskv1.NewRiskServiceClient(conn).CheckRisk(ctx, &riskv1.CheckRiskRequest{
+	resp, err := h.riskClient.CheckRisk(ctx, &riskv1.CheckRiskRequest{
 		ClientId:   req.ClientId,
 		Symbol:     req.Symbol,
 		Exchange:   req.Exchange,
@@ -308,4 +323,35 @@ func (h *OrderHandler) publishEvent(subject string, payload map[string]any) erro
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	return h.nats.Publish(subject, data)
+}
+
+// riskTransportCreds returns mTLS credentials when RISK_TLS_CERT / RISK_TLS_KEY /
+// RISK_TLS_CA are all set; otherwise falls back to insecure (plain-text gRPC).
+func riskTransportCreds() credentials.TransportCredentials {
+	certFile := os.Getenv("RISK_TLS_CERT")
+	keyFile := os.Getenv("RISK_TLS_KEY")
+	caFile := os.Getenv("RISK_TLS_CA")
+
+	if certFile == "" || keyFile == "" || caFile == "" {
+		return insecure.NewCredentials()
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return insecure.NewCredentials()
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return insecure.NewCredentials()
+	}
+
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+
+	return credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		ServerName:   "risk-engine",
+	})
 }

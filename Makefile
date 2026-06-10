@@ -1,4 +1,4 @@
-.PHONY: proto run-order-service run-risk-engine test docker-up docker-down lint tidy
+.PHONY: proto run-order-service run-risk-engine test docker-up docker-down lint tidy gen-certs
 
 # ── Protobuf ─────────────────────────────────────────────────────────────────
 proto:
@@ -33,6 +33,10 @@ tidy:
 	go work sync
 	go mod tidy -C services/order-service
 	go mod tidy -C services/risk-engine
+	go mod tidy -C services/market-data-sim
 
 lint:
 	golangci-lint run ./...
+
+gen-certs:
+	go run ./certs/gen.go

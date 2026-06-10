@@ -12,9 +12,11 @@ COPY go.work go.work.sum ./
 COPY gen/go.mod      gen/go.sum      ./gen/
 COPY pkg/go.mod      pkg/go.sum      ./pkg/
 COPY services/order-service/go.mod \
-     services/order-service/go.sum  ./services/order-service/
+     services/order-service/go.sum      ./services/order-service/
 COPY services/risk-engine/go.mod \
-     services/risk-engine/go.sum   ./services/risk-engine/
+     services/risk-engine/go.sum        ./services/risk-engine/
+COPY services/market-data-sim/go.mod \
+     services/market-data-sim/go.sum    ./services/market-data-sim/
 
 # Download all dependencies (cached unless go.mod/go.sum change)
 RUN go work sync

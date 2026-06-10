@@ -44,3 +44,6 @@ data/
 
 # Air live-reload tmp dir
 tmp/
+
+# Generated TLS private keys (certs/*.crt are safe to commit)
+certs/*.key

@@ -46,6 +46,19 @@ services:
       timeout: 3s
       retries: 5
 
+  market-data-sim:
+    build:
+      context: .
+      dockerfile: services/market-data-sim/Dockerfile
+    container_name: oms-market-data-sim
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis:6379
+      TICK_INTERVAL_MS: 2000
+    depends_on:
+      redis:
+        condition: service_healthy
+
   risk-engine:
     build:
       context: .                                        # monorepo root — Dockerfile needs all modules
@@ -57,6 +70,12 @@ services:
     environment:
       GRPC_PORT: 50052
       REDIS_ADDR: redis:6379                            # Docker service name + container-internal port
+      # ── mTLS (uncomment after running: go run ./certs/gen.go) ───────────────
+      # GRPC_TLS_CERT: /certs/risk-engine.crt
+      # GRPC_TLS_KEY:  /certs/risk-engine.key
+      # GRPC_CA_CERT:  /certs/ca.crt
+    # volumes:
+    #   - ./certs:/certs:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -74,7 +93,7 @@ services:
     restart: unless-stopped
     ports:
       - "50051:50051"
-      - "8080:8080"                                     # Gin HTTP API
+      - "8081:8080"                                     # Gin HTTP API (8080 may be taken locally)
     environment:
       GRPC_PORT: 50051
       HTTP_PORT: 8080
@@ -85,12 +104,24 @@ services:
       DB_NAME: oms
       NATS_URL: nats://nats:4222                        # container-internal port
       RISK_ADDR: risk-engine:50052                      # Docker service name + container-internal port
+      REDIS_ADDR: redis:6379                            # for JetStream position-tracker consumer
+      # ── mTLS (uncomment after running: go run ./certs/gen.go) ───────────────
+      # GRPC_TLS_CERT:  /certs/order-service.crt
+      # GRPC_TLS_KEY:   /certs/order-service.key
+      # GRPC_CA_CERT:   /certs/ca.crt
+      # RISK_TLS_CERT:  /certs/order-service.crt
+      # RISK_TLS_KEY:   /certs/order-service.key
+      # RISK_TLS_CA:    /certs/ca.crt
+    # volumes:
+    #   - ./certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
       nats:
         condition: service_healthy
       risk-engine:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]

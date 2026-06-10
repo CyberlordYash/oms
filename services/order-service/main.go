@@ -12,9 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/viper"
 	pkgdb "github.com/yourusername/oms/pkg/db"
 	pkgnats "github.com/yourusername/oms/pkg/nats"
+	"github.com/yourusername/oms/services/order-service/internal/consumer"
 	"github.com/yourusername/oms/services/order-service/internal/metrics"
 	"github.com/yourusername/oms/services/order-service/internal/processor"
 	"github.com/yourusername/oms/services/order-service/repository"
@@ -38,12 +40,13 @@ func run(logger *slog.Logger) error {
 	viper.SetDefault("grpc.port", 50051)
 	viper.SetDefault("http.port", 8080)
 	viper.SetDefault("db.host", "localhost")
-	viper.SetDefault("db.port", 5433)       // docker-compose host port
+	viper.SetDefault("db.port", 5433)
 	viper.SetDefault("db.user", "oms")
 	viper.SetDefault("db.password", "oms_secret")
 	viper.SetDefault("db.name", "oms")
-	viper.SetDefault("nats.url", "nats://localhost:4223") // docker-compose host port
+	viper.SetDefault("nats.url", "nats://localhost:4223")
 	viper.SetDefault("risk.addr", "localhost:50052")
+	viper.SetDefault("redis.addr", "localhost:6380")
 	viper.SetDefault("pool.workers", 8)
 	viper.SetDefault("pool.queue", 1024)
 	viper.SetDefault("pool.submit_timeout_ms", 50)
@@ -53,9 +56,9 @@ func run(logger *slog.Logger) error {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_")) // db.host → DB_HOST
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
-	_ = viper.ReadInConfig() // config file is optional; env vars / defaults suffice
+	_ = viper.ReadInConfig()
 
 	grpcPort := viper.GetInt("grpc.port")
 	httpPort := viper.GetInt("http.port")
@@ -77,14 +80,30 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 	logger.Info("postgres connected")
 
+	// ── Redis (position tracking for JetStream consumer) ─────────────────────
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         viper.GetString("redis.addr"),
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+	})
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		// Redis is used for position tracking only; let the service start without it.
+		logger.Warn("redis unavailable — position tracking will be disabled", "error", err)
+		rdb = nil
+	} else {
+		defer rdb.Close()
+		logger.Info("redis connected", "addr", viper.GetString("redis.addr"))
+	}
+
 	// ── NATS ──────────────────────────────────────────────────────────────────
 	natsClient, err := pkgnats.New(pkgnats.Config{
 		URL:           viper.GetString("nats.url"),
 		MaxReconnects: 10,
 	})
 	if err != nil {
-		// NATS is important but we allow the service to start without it so
-		// that local development without a NATS server is still possible.
 		logger.Warn("nats unavailable — order events will not be published", "error", err)
 		natsClient = nil
 	} else {
@@ -95,7 +114,6 @@ func run(logger *slog.Logger) error {
 	// ── Dependencies ──────────────────────────────────────────────────────────
 	repo := repository.New(pool)
 
-	// natsClient satisfies natswrapper.Publisher; when nil we use a no-op.
 	var publisher natswrapper
 	if natsClient != nil {
 		publisher = natsClient
@@ -114,13 +132,31 @@ func run(logger *slog.Logger) error {
 	})
 	workerPool.Start()
 
-	// ── Servers (gRPC + HTTP share the same OrderHandler) ──────────────────────
-	grpcServer, orderHandler := server.New(repo, publisher, workerPool, reg, viper.GetString("risk.addr"), logger)
+	// ── Servers ───────────────────────────────────────────────────────────────
+	grpcServer, orderHandler, err := server.New(repo, publisher, workerPool, reg, viper.GetString("risk.addr"), logger)
+	if err != nil {
+		return fmt.Errorf("build gRPC server: %w", err)
+	}
+	defer orderHandler.Close()
+
 	httpServer := routes.New(fmt.Sprintf(":%d", httpPort), orderHandler, reg, logger)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
 	if err != nil {
 		return fmt.Errorf("listen on :%d: %w", grpcPort, err)
+	}
+
+	// ── JetStream consumer ────────────────────────────────────────────────────
+	var posTracker *consumer.PositionTracker
+	if natsClient != nil && rdb != nil {
+		posTracker = consumer.New(natsClient.JS, rdb, logger)
+		if err := posTracker.Start(context.Background()); err != nil {
+			// Non-fatal: position tracking is a best-effort enhancement.
+			logger.Warn("position tracker failed to start", "error", err)
+			posTracker = nil
+		} else {
+			logger.Info("position tracker started")
+		}
 	}
 
 	// ── Run + graceful shutdown ───────────────────────────────────────────────
@@ -148,27 +184,25 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// 1. Stop accepting new orders on both transports.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
+
+	if posTracker != nil {
+		posTracker.Stop()
+	}
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown", "error", err)
 	}
 	grpcServer.GracefulStop()
-
-	// 2. Drain in-flight orders so no accepted order is lost.
 	workerPool.Stop(shutdownCtx)
 
-	// 3. NATS and DB pool are closed by the deferred calls above.
 	return nil
 }
 
-// natswrapper is the minimal interface used inside main.
 type natswrapper interface {
 	Publish(subject string, data []byte) error
 }
 
-// noopPublisher silently drops events when NATS is unavailable.
 type noopPublisher struct{}
 
 func (noopPublisher) Publish(_ string, _ []byte) error { return nil }
